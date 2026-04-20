@@ -16,15 +16,38 @@ You don't need to name the skill — Claude matches it from the task.
 
 ## Install
 
-### User scope (available in every Claude Code session)
+### With the `skills` CLI (recommended)
+
+One-liner via the [open agent skills CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add https://github.com/edenai/edenai-skill
+```
+
+Useful flags:
+
+```bash
+# Install globally (available in every session) to Claude Code only
+npx skills add https://github.com/edenai/edenai-skill -g -a claude-code -y
+
+# Install into the current project only
+npx skills add https://github.com/edenai/edenai-skill -a claude-code -y
+
+# Target another supported agent (Cursor, Codex, OpenCode, Gemini CLI, …)
+npx skills add https://github.com/edenai/edenai-skill -a cursor
+```
+
+`-g` installs to the user scope (`~/.claude/skills/`); without it the skill is installed to the project scope (`./.claude/skills/`). See `npx skills add --help` for the full list of supported agents and options.
+
+### With `git clone`
+
+User scope (available in every Claude Code session):
 
 ```bash
 git clone https://github.com/edenai/edenai-skill.git ~/.claude/skills/edenai
 ```
 
-### Project scope (available only in one repo)
-
-From inside the project directory:
+Project scope (available only in one repo) — from inside the project directory:
 
 ```bash
 mkdir -p .claude/skills
@@ -84,8 +107,27 @@ cd ~/.claude/skills/edenai && git pull
 
 ## Uninstalling
 
+### With the `skills` CLI
+
 ```bash
+# Remove the skill (prompts for scope)
+npx skills remove edenai
+
+# Remove from user scope, Claude Code only, no prompts
+npx skills remove edenai -g -a claude-code -y
+
+# Interactive picker across all installed skills
+npx skills remove
+```
+
+### Manual
+
+```bash
+# User scope
 rm -rf ~/.claude/skills/edenai
+
+# Project scope
+rm -rf .claude/skills/edenai
 ```
 
 ## Links
