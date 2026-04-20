@@ -35,13 +35,15 @@ Content-Type: application/json
 
 ## The v3 API surface
 
-Every AI call goes through one of three v3 endpoints:
+Every AI call goes through one of these v3 endpoints:
 
 - **`POST /v3/chat/completions`** — OpenAI-compatible LLM chat. Use for any chat/completion against any LLM (Claude, GPT, Gemini, Mistral, Llama, Cohere, DeepSeek, Qwen, etc.). Drop-in replacement for OpenAI's `/chat/completions`.
+- **`POST /v3/responses`** — OpenAI-Responses-compatible. Same provider/model catalog as `/v3/chat/completions`, plus optional server-side conversation state (`store` + `previous_response_id`) so multi-turn chats don't resend full history.
+- **`POST /v3/v1/messages`** — Anthropic-Messages-compatible drop-in. Accepts native Anthropic request bodies and returns Anthropic-shaped responses. Also usable as a **Claude Code backend** via `ANTHROPIC_BASE_URL`.
 - **`POST /v3/universal-ai`** — every non-LLM AI feature (OCR, image gen, TTS, STT, document parsing, moderation, NER, translation, etc.). Single endpoint; the `model` field routes to the right feature and provider.
 - **`POST /v3/universal-ai/async`** — same thing for long-running tasks (video generation, speech-to-text, multi-page OCR). Returns a `job_id` you poll on `GET /v3/universal-ai/async/{job_id}`.
 
-Plus a few support endpoints: `POST /v3/moderations` (OpenAI-compatible), `POST /v3/upload` (file management), `GET /v3/info` (feature catalog), `GET /v3/models` (LLM catalog).
+Plus a few support endpoints: `POST /v3/moderations` (OpenAI-compatible), `POST /v3/v1/messages/count_tokens` (Anthropic-compatible token counter), `POST /v3/upload` (file management), `GET /v3/info` (feature catalog), `GET /v3/models` (LLM catalog).
 
 > **v2 is legacy.** Only cost monitoring and user-token management remain on `/v2/*` — supported through end of 2026. Never use v2 for AI calls.
 
@@ -248,6 +250,100 @@ When the user cares about cost comparison — and they often do, it's half the r
 - **Use async for anything long-running.** Video, multi-page OCR, speech-to-text on meeting-length audio — always the async endpoint.
 - **Upload reused files once.** Large files used in multiple calls should go through `/v3/upload` first.
 
+## Responses API — `POST /v3/responses`
+
+OpenAI-Responses-compatible. Same `provider/model-id` format as `/v3/chat/completions` (e.g. `openai/gpt-4o`, `anthropic/claude-opus-4-7`). Pick this endpoint over `/v3/chat/completions` when you want Eden AI to **store the conversation server-side** so subsequent turns don't resend the full history.
+
+```bash
+curl -X POST https://api.edenai.run/v3/responses \
+  -H "Authorization: Bearer $EDENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai/gpt-4o",
+    "instructions": "You are a terse assistant.",
+    "input": "Summarize the Krebs cycle in one line."
+  }'
+```
+
+Eden-specific extras carry over from universal-ai: pass `fallbacks` for sequential retry across providers, and read the `cost` field (USD) from the response to track spend per call.
+
+### Conversation chaining with `previous_response_id`
+
+Set `store: true` on turn 1, capture the returned `id`, then pass it as `previous_response_id` on turn 2 — the server threads history, you only send the new input. Cheaper and simpler than replaying `messages` on every turn.
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    api_key=os.environ["EDENAI_API_KEY"],
+    base_url="https://api.edenai.run/v3",
+)
+
+t1 = client.responses.create(
+    model="anthropic/claude-opus-4-7",
+    input="My favorite color is periwinkle.",
+    store=True,
+)
+
+t2 = client.responses.create(
+    model="anthropic/claude-opus-4-7",
+    input="What did I just tell you?",
+    previous_response_id=t1.id,
+)
+```
+
+Stored responses can also be fetched with `GET /v3/responses/{id}` and removed with `DELETE /v3/responses/{id}` when you're done.
+
+## Anthropic-compatible messages — `POST /v3/v1/messages`
+
+Drop-in for Anthropic's native `/v1/messages`. Accepts the same body shape — `model`, `messages`, `system`, `max_tokens`, `tools`, `tool_choice`, `stream` — and returns Anthropic-shaped responses. Use this when you already have code written against the Anthropic SDK and want Eden AI's routing, fallbacks, and consolidated billing without a rewrite.
+
+```bash
+curl -X POST https://api.edenai.run/v3/v1/messages \
+  -H "Authorization: Bearer $EDENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic/claude-opus-4-7",
+    "max_tokens": 256,
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+The Anthropic Python SDK works by swapping base URL and auth token — mirror of the OpenAI-SDK pattern above:
+
+```python
+from anthropic import Anthropic
+import os
+
+client = Anthropic(
+    auth_token=os.environ["EDENAI_API_KEY"],
+    base_url="https://api.edenai.run/v3",
+)
+
+resp = client.messages.create(
+    model="anthropic/claude-sonnet-4-6",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
+### Using Eden AI as a Claude Code backend
+
+Because `/v3/v1/messages` is drop-in Anthropic-compatible, Claude Code itself can be pointed at Eden AI — no code changes, just two env vars:
+
+```bash
+export ANTHROPIC_BASE_URL="https://api.edenai.run/v3"
+export ANTHROPIC_AUTH_TOKEN="$EDENAI_API_KEY"
+claude
+```
+
+Claude Code's existing Anthropic SDK calls hit `/v3/v1/messages` unchanged. You get BYOK, consolidated billing, and provider-level fallback routing for Claude Code sessions — same unlock applies to any app built on the Anthropic SDK.
+
+### Token counting — `POST /v3/v1/messages/count_tokens`
+
+Takes the same body shape as `/v3/v1/messages` (drop `max_tokens`) and returns a token count. Useful for pre-flight budgeting, context-window checks, and cost estimation before firing the real request.
+
 ## Quick recipes
 
 **"Translate this and moderate the output."** → Two `/v3/universal-ai` calls: `translation/automatic_translation/deepl` then `text/moderation/openai`.
@@ -261,6 +357,8 @@ When the user cares about cost comparison — and they often do, it's half the r
 **"Generate a product image."** → `/v3/universal-ai` with `model: "image/generation/stabilityai"` (or OpenAI, Replicate, MiniMax, ByteDance, Leonardo).
 
 **"Fallback from OpenAI to Anthropic if OpenAI is down."** → `/v3/chat/completions` with smart routing, or `/v3/universal-ai` with `fallbacks: ["text/moderation/anthropic"]` etc.
+
+**"Route Claude Code through Eden AI."** → `export ANTHROPIC_BASE_URL="https://api.edenai.run/v3"` and `export ANTHROPIC_AUTH_TOKEN="$EDENAI_API_KEY"`. Claude Code's Anthropic SDK calls hit `/v3/v1/messages` unchanged — consolidated billing and fallback routing without touching code.
 
 ---
 
