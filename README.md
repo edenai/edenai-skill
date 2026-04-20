@@ -97,7 +97,7 @@ rm -rf ~/.claude/skills/edenai
 
 ## Contributing
 
-The skill is a single `SKILL.md` file. Edits welcome — open a PR on https://github.com/edenai/edenai-skill.
+The skill is `SKILL.md` plus deeper docs under `references/` that Claude reads on demand. Edits welcome — open a PR on https://github.com/edenai/edenai-skill.
 
 ## License
 
