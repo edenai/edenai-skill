@@ -77,30 +77,16 @@ resp = client.chat.completions.create(
 )
 ```
 
-### Provider prefixes
+### Finding models
 
-Never hardcode a model list — the catalog changes frequently. Fetch it live:
+The LLM catalog changes often — do NOT rely on any hardcoded list. Always fetch the current catalog before picking a model when the user hasn't named one explicitly:
 
 ```bash
 curl -s https://api.edenai.run/v3/models \
   -H "Authorization: Bearer $EDENAI_API_KEY"
 ```
 
-Known prefixes, with a sample model for orientation:
-
-| Prefix | Example model IDs |
-|---|---|
-| `anthropic/` | `anthropic/claude-opus-4-7`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-haiku-4-5` |
-| `openai/` | `openai/gpt-4o`, `openai/gpt-4o-mini` |
-| `google/` | `google/gemini-2.5-pro`, `google/gemini-2.5-flash` |
-| `mistral/` | `mistral/mistral-large-latest` |
-| `cohere/` | `cohere/command-a-03-2025`, `cohere/command-r-plus-08-2024` |
-| `amazon/` | Bedrock hub — e.g. `amazon/anthropic.claude-3-haiku-20240307-v1:0`, `amazon/amazon.nova-pro-v1:0`, `amazon/meta.llama3-70b-instruct-v1:0` |
-| `bytedance/` | `bytedance/seed-2-0-pro-260328` |
-| `databricks/` | `databricks/databricks-claude-opus-4-5` |
-| `deepinfra/` | `deepinfra/deepseek-ai/DeepSeek-V3` |
-| `cloudflare/` | `cloudflare/@cf/meta/llama-2-7b-chat-fp16` |
-| `cerebras/` | `cerebras/llama3.1-8b` |
+Model IDs follow a `provider/model-id` shape. Common prefixes include `anthropic/`, `openai/`, `google/`, `mistral/`, `cohere/`, `amazon/` (Bedrock hub), `databricks/`, `deepinfra/`, `cloudflare/`, `cerebras/`, `bytedance/`. A few concrete examples for orientation: `anthropic/claude-opus-4-7`, `openai/gpt-4o`, `google/gemini-2.5-pro`. This list is illustrative — new providers appear often; check `GET /v3/models` for truth.
 
 ### LLM features
 
@@ -146,66 +132,27 @@ curl -X POST https://api.edenai.run/v3/universal-ai \
 
 v3 does **not** run multiple providers in parallel in a single call. If the user wants side-by-side provider comparison (e.g. cost/quality A/B), fire multiple `POST /v3/universal-ai` requests in parallel from your code and aggregate the results. Use `fallbacks` for *reliability* (sequential retry), multi-request fan-out for *comparison*.
 
-### Feature catalog
+### Finding features
 
-All the following are valid `model` strings — substitute one of the listed providers for `{provider}`. For the authoritative live list of features and their supported providers, fetch `GET /v3/info`.
+The feature × provider matrix changes often — do NOT rely on any hardcoded list. Always fetch the authoritative catalog before picking a feature/provider pair:
 
-**Text analysis**
+```bash
+curl -s https://api.edenai.run/v3/info \
+  -H "Authorization: Bearer $EDENAI_API_KEY"
+```
 
-| Model string | Description | Providers |
-|---|---|---|
-| `text/ai_detection/{provider}` | AI-generated text vs. human | Sapling, WinstonAI |
-| `text/moderation/{provider}` | Offensive / harmful content scan | Google, Microsoft, OpenAI |
-| `text/spell_check/{provider}` | Spelling & grammar | ProWritingAid, Sapling |
-| `text/topic_extraction/{provider}` | Themes & topics | Google, OpenAI, TensTorrent |
-| `text/named_entity_recognition/{provider}` | Entities (people, places, orgs) | Amazon, Microsoft, OpenAI, TensTorrent |
-| `text/plagia_detection/{provider}` | Plagiarism | WinstonAI |
+Every AI feature lives under one of six categories: `text`, `translation`, `ocr`, `image`, `audio`, `video`. Model strings follow `category/feature/provider`.
 
-**Translation**
+Illustrative examples (not exhaustive — call `GET /v3/info` for the full list and supported providers):
 
-| Model string | Description | Providers |
-|---|---|---|
-| `translation/automatic_translation/{provider}` | Translate text | Amazon, DeepL, Google, Microsoft, ModernMT, OpenAI |
-| `translation/document_translation/{provider}` | Translate a whole document | DeepL, Google |
+- **text** — `text/moderation/{provider}`, `text/named_entity_recognition/{provider}`, `text/topic_extraction/{provider}`
+- **translation** — `translation/automatic_translation/{provider}`, `translation/document_translation/{provider}`
+- **ocr** — `ocr/ocr/{provider}`, `ocr/financial_parser/{provider}`, `ocr/identity_parser/{provider}`, `ocr/resume_parser/{provider}`
+- **image** — `image/generation/{provider}`, `image/object_detection/{provider}`, `image/background_removal/{provider}`, `image/face_detection/{provider}`
+- **audio** — `audio/text_to_speech/{provider}`, `audio/speech_to_text_async/{provider}`
+- **video** — `video/generation_async/{provider}`
 
-**OCR & document parsing**
-
-| Model string | Description | Providers |
-|---|---|---|
-| `ocr/ocr/{provider}` | Generic text detection | Amazon, API4AI, Google, Microsoft, Mistral, SentiSight |
-| `ocr/ocr_async/{provider}` | Multi-page OCR (async) | Amazon, Microsoft, Mistral |
-| `ocr/ocr_tables_async/{provider}` | Structured table extraction (async) | Amazon, Google, Microsoft |
-| `ocr/identity_parser/{provider}` | ID document fields | Affinda, Amazon, Base64, Klippa, Microsoft, Mindee, OpenAI |
-| `ocr/financial_parser/{provider}` | Invoices, receipts, bank statements, bank checks | Affinda, Amazon, Base64, EagleDoc, Extracta, Google, Klippa, Microsoft, Mindee, OpenAI, TabScanner, Veryfi |
-| `ocr/resume_parser/{provider}` | Structured resume data | Affinda, Extracta, Klippa, OpenAI, SenseLoaf |
-
-**Image**
-
-| Model string | Description | Providers |
-|---|---|---|
-| `image/generation/{provider}` | Text-to-image | ByteDance, Leonardo, MiniMax, OpenAI (DALL-E 2 & 3), Replicate, StabilityAI |
-| `image/background_removal/{provider}` | Strip background | API4AI, Clipdrop, PhotoRoom, PicsArt, SentiSight, StabilityAI |
-| `image/ai_detection/{provider}` | AI-generated image detection | WinstonAI |
-| `image/object_detection/{provider}` | Objects + bounding boxes | Amazon, API4AI, Clarifai, Google, Microsoft, SentiSight |
-| `image/face_detection/{provider}` | Faces & attributes | Amazon, API4AI, Clarifai, Google |
-| `image/explicit_content/{provider}` | NSFW / explicit flag | Amazon, Clarifai, Google, Microsoft, OpenAI, SentiSight |
-| `image/anonymization/{provider}` | Blur faces / PII | API4AI |
-| `image/deepfake_detection/{provider}` | Manipulated face detection | SightEngine |
-| `image/face_compare/{provider}` | Face similarity | Amazon, Base64, FacePlusPlus |
-| `image/logo_detection/{provider}` | Brand logo detection | API4AI, Clarifai, Google, Microsoft, OpenAI |
-
-**Audio**
-
-| Model string | Description | Providers |
-|---|---|---|
-| `audio/text_to_speech/{provider}` | Text → audio | Amazon, Deepgram, ElevenLabs, Google, Lovo AI, Microsoft, OpenAI |
-| `audio/speech_to_text_async/{provider}` | Transcription + diarization (async) | Amazon, AssemblyAI, Deepgram, Gladia, Google, Microsoft, OpenAI |
-
-**Video**
-
-| Model string | Description | Providers |
-|---|---|---|
-| `video/generation_async/{provider}` | Text / image → video (async) | Amazon, ByteDance, Google, MiniMax, OpenAI |
+Feature names ending in `_async` must use the async endpoint (`POST /v3/universal-ai/async`).
 
 ## Async jobs — `/v3/universal-ai/async`
 
