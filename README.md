@@ -1,16 +1,17 @@
 # Eden AI skill for Claude Code
 
-An agent skill that teaches [Claude Code](https://claude.com/claude-code) to use [Eden AI](https://edenai.co) — a unified API for 500+ AI models across OpenAI, Anthropic, Google, AWS, Mistral, Cohere, Stability, ElevenLabs, Deepgram, Replicate, and many more providers.
+An agent skill that teaches [Claude Code](https://claude.com/claude-code) to use [Eden AI](https://edenai.co), an AI gateway with one API key for 500+ models from OpenAI, Anthropic, Google, Mistral, AWS, Azure and 50+ other providers.
 
-Once installed, Claude will reach for Eden AI automatically whenever you ask for:
+Once installed, Claude reaches for Eden AI whenever you ask for:
 
-- LLM chat / completion against any provider (OpenAI-compatible)
-- OCR & document parsing — invoices, receipts, IDs, resumes, tables
-- Image generation, object / face / logo detection, background removal, deepfake detection
-- Text-to-speech and speech-to-text with speaker diarization
-- Video generation
-- Translation, moderation, NER, topic extraction, AI-content detection
-- Provider comparison, fallback, or cost benchmarking on the same input
+- **LLM chat** against any provider, through the OpenAI-compatible, OpenAI Responses or Anthropic Messages APIs. This includes routing by price or latency, fallbacks, and the `@edenai` model router.
+- **Embeddings, images, audio, video and moderation**, through OpenAI-compatible endpoints.
+- **OCR and document parsing:** invoices, receipts, IDs, resumes and tables.
+- **Web search, scraping, crawling and deep research** for agents, from Tavily, Firecrawl and Linkup.
+- **Speech:** text-to-speech, and speech-to-text with speaker labels.
+- **Other expert models:** image and video generation, image analysis, translation, moderation, and AI-content and deepfake detection.
+- **Eden AI's MCP server**, which gives an agent the expert models as tools.
+- **Account work:** cost tracking per customer with tags, sandbox keys for tests, usage reports and key management through the Management API, BYOK and the EU endpoint.
 
 You don't need to name the skill — Claude matches it from the task.
 
@@ -81,23 +82,33 @@ Examples:
 
 > *"Transcribe this meeting recording and identify speakers: `https://example.com/meeting.mp3`"*
 
-> *"Compare GPT-4o and Claude Opus on this prompt and show me both responses with cost."*
+> *"Compare GPT and Claude on this prompt and show me both responses with their cost."*
 
-> *"Parse the line items out of this invoice PDF."*
+> *"Parse the line items out of this invoice PDF, and fall back to another parser if the first one fails."*
 
-> *"Generate three product photos for a ceramic mug using Stability and DALL-E 3."*
+> *"Give my agent web search and page scraping through Eden AI's MCP server."*
 
-> *"Moderate this user comment across Google, Microsoft, and OpenAI and flag the strictest verdict."*
+> *"Generate three product photos for a ceramic mug with Gemini and GPT Image."*
+
+> *"Tag every call with the customer id so I can see what each customer costs."*
 
 ## What's in the skill
 
-- The two Eden AI surfaces (`/v3/llm/*` OpenAI-compatible + `/v2/*` task-specific).
-- The full feature catalog by category — text, image, audio, video, OCR, documents, translation — with endpoints and supporting providers.
-- Provider prefixes for the 500+ model LLM catalog.
-- Canonical multi-provider request shape, per-provider response handling, cost field.
-- Async polling pattern (with webhook alternative).
-- Error handling — HTTP-level vs. per-provider `status: "fail"` inside a 200.
-- Good-defaults guardrails (never log the key, start with one provider, prefer specialized endpoints, surface cost, use `fallback_providers` for production reliability).
+- **`SKILL.md`** is the map. It covers:
+  - every v3 endpoint, and which one to use for a task;
+  - model strings and the live catalogs that list them;
+  - chat with Eden AI's extensions;
+  - Universal AI's request and response shape, and its feature catalog;
+  - async jobs, files and the MCP server;
+  - errors, cost, and quick recipes.
+- **`references/routing-and-reliability.md`** covers provider routing, `@edenai`, fallbacks, request metadata, and response and prompt caching.
+- **`references/universal-ai.md`** has providers and inputs per feature, output shapes, `provider_params`, async jobs, signed webhooks and face-recognition collections.
+- **`references/openai-compatible-media.md`** covers embeddings, images, audio, video, moderation, and decisions (alpha).
+- **`references/mcp-server.md`** covers connecting a client, the tools, and using them from any LLM.
+- **`references/account-and-governance.md`** covers key types, sandbox, tags, the Management API, usage, pricing and limits, BYOK, guardrails and the EU endpoint.
+- **`references/responses-api.md`** and **`references/anthropic-messages.md`** cover the other two chat dialects, and Claude Code on Eden AI.
+
+Claude reads a reference file only when a task needs it.
 
 ## Updating
 
@@ -133,9 +144,11 @@ rm -rf .claude/skills/edenai
 ## Links
 
 - Eden AI: https://edenai.co
-- API docs: https://edenai.co/docs
-- Live LLM catalog: `GET https://api.edenai.run/v3/llm/models`
-- Full feature inventory: `GET https://api.edenai.run/v3/info/`
+- API docs: https://edenai.co/docs, with an index for LLMs at https://www.edenai.co/docs/llms.txt
+- OpenAPI spec: https://api.edenai.run/v3/docs/openapi.json
+- Live LLM catalog (public): `GET https://api.edenai.run/v3/models`
+- Live expert-model catalog (public): `GET https://api.edenai.run/v3/info`
+- MCP server: `https://mcp.edenai.run/mcp`
 
 ## Contributing
 
