@@ -1,284 +1,247 @@
 ---
 name: edenai
-description: Use this skill whenever the user wants to call AI services through Eden AI — a unified API over 500+ models that routes to OpenAI, Anthropic, Google, AWS, Mistral, Cohere, Stability, ElevenLabs, Deepgram, Replicate, and many other providers with one key. Trigger for LLM chat/completion (OpenAI-compatible `/v3/chat/completions`), and for every non-LLM AI task through the unified `/v3/universal-ai` endpoint — text tasks (moderation, NER, topic extraction, spell check, AI-content detection, plagiarism), translation (text + document), image tasks (generation, object/face/logo detection, explicit content, deepfake detection, background removal, anonymization, face compare), speech (text-to-speech, speech-to-text with diarization), OCR & document parsing (invoices, receipts, IDs, resumes, tables), or video generation. Also trigger when the user mentions comparing AI providers, benchmarking inputs across providers, consolidating multi-vendor AI billing, avoiding vendor lock-in, building provider fallbacks, smart routing, BYOK, or names "Eden AI" / "edenai" directly. Prefer this skill over writing bespoke HTTP code against individual providers whenever a user hints at multi-provider needs.
+description: Use this skill whenever the user wants to call AI models through Eden AI (edenai), a gateway over 500+ models from OpenAI, Anthropic, Google, Mistral, AWS, Azure and 50+ other providers behind one API key. Covers LLM chat through the OpenAI-compatible /v3/chat/completions (plus the Responses and Anthropic Messages dialects), provider routing, fallbacks and the @edenai model router; OpenAI-compatible embeddings, images, audio, video and moderation endpoints; and every expert model through /v3/universal-ai, including OCR and document parsing (invoices, IDs, resumes, tables), web search, scraping, crawling and deep research, translation, speech, image and video generation, and moderation. Also covers async jobs, webhooks, file upload, the hosted MCP server, tags, cost tracking, sandbox and management keys, BYOK and the EU endpoint. Trigger when the user names Eden AI, or wants one key or one bill across providers, provider comparison, fallbacks or smart routing.
 ---
 
 # Eden AI
 
-Eden AI is a unified API layer over 500+ models and many providers. One endpoint, one key, consistent request shape. This skill covers the v3 API surface, the universal-ai `model` string, the fallbacks pattern, every task category, async job polling, and the non-obvious error-handling patterns.
+Eden AI is an AI gateway: one API key, one bill and one request shape for 500+ models from 50+ providers. Every response reports what it cost. This file is the map; the `references/` files hold the details and are worth reading only when the task needs them.
+
+The catalog changes weekly. Never trust a model or provider name from memory, including the ones in this file: check the live catalog first (see [Discovery](#discovery)). The docs are at https://www.edenai.co/docs, with a machine-readable index at https://www.edenai.co/docs/llms.txt.
 
 ## When this skill applies
 
-- Any task where the user says "use Eden AI" or references `edenai`.
-- Any task where the user wants to compare or build fallbacks across multiple providers.
-- Any task in a supported category (LLM, text, image, audio, video, OCR, documents, translation) where the user hasn't committed to a specific provider's native SDK.
-- When the user wants consolidated billing / cost visibility across providers, or a single key to many models.
+- The user says "Eden AI" or "edenai", or the code already calls `api.edenai.run`.
+- The user wants several providers behind one key: comparing models or providers, fallbacks, routing by price or speed, one bill, per-customer cost tracking.
+- The task is an AI feature the user hasn't tied to a provider's own SDK: chat, embeddings, OCR, document parsing, web search, speech, translation, image or video generation, moderation.
 
-If the user has already committed to a specific provider's native SDK (e.g. "use the OpenAI Python SDK"), don't force Eden AI — use the native SDK. Eden AI's value is breadth, not depth.
+If the user has chosen a provider's native SDK and wants only that provider, use the native SDK.
 
 ## Setup
 
-Eden AI uses a single API key. Store it in `EDENAI_API_KEY`. Never hardcode.
+```bash
+export EDENAI_API_KEY="sk-eden-..."   # never hardcode it, never print it
+```
+
+- **Base URL:** `https://api.edenai.run/v3`. For EU data residency use `https://api.eu.edenai.run/v3` with the same key. It only routes to EU-cleared providers and returns HTTP 451 for anything else.
+- **Auth:** `Authorization: Bearer $EDENAI_API_KEY` on every call.
+- **Key types:**
+  - `sk-eden-…` inference keys call models.
+  - Sandbox keys (`sandbox_api_token`) return free mock responses in the real shape, for CI and development.
+  - `mgmt-eden-…` management keys only call `/v3/manage/*`: creating keys and reading usage.
+  - Details are in [references/account-and-governance.md](references/account-and-governance.md).
+
+## Which endpoint
+
+| Task | Endpoint | `model` format |
+|---|---|---|
+| Chat, vision, tools, structured output, web-grounded answers | `POST /v3/chat/completions` (OpenAI-compatible) | `provider/model` |
+| Chat with server-side history | `POST /v3/responses` (OpenAI Responses) | `provider/model` |
+| Anthropic SDK code, Claude Code | `POST /v3/v1/messages` (Anthropic Messages) | `provider/model` |
+| Embeddings | `POST /v3/embeddings` | `provider/model` |
+| Images, in the OpenAI shape | `POST /v3/images/generations`, `POST /v3/images/edits` | `provider/model` |
+| Speech, in the OpenAI shape | `POST /v3/audio/speech`, `POST /v3/audio/transcriptions` | `provider/model` |
+| Video, in the OpenAI shape | `POST /v3/videos`, then poll `GET /v3/videos/{id}` | `provider/model` |
+| Moderation, in the OpenAI shape | `POST /v3/moderations` | e.g. `openai/omni-moderation-latest` |
+| Typed yes/no, choice or score answers (alpha) | `POST /v3/alpha/decisions` | e.g. `typesafe/jev-latest` |
+| Every other AI feature: OCR, parsing, web, translation, detection… | `POST /v3/universal-ai`, or `/v3/universal-ai/async` for `_async` features | `feature/subfeature/provider[/model]` |
+| Files used by several calls | `POST /v3/upload` | |
+| Expert models as tools for an agent | MCP server `https://mcp.edenai.run/mcp` | |
+
+The OpenAI-compatible endpoints work with the official OpenAI SDK: set `base_url="https://api.edenai.run/v3"` and pass the Eden AI key as `api_key`. Details for the media endpoints are in [references/openai-compatible-media.md](references/openai-compatible-media.md).
+
+## Discovery
+
+These endpoints are public, so no key is needed. Check them before choosing a model:
 
 ```bash
-export EDENAI_API_KEY="your-key-here"
+curl -s https://api.edenai.run/v3/models                    # every LLM endpoint: pricing, context, capabilities, regions
+curl -s "https://api.edenai.run/v3/models?view=models"      # one entry per routable model name, providers nested under it
+curl -s https://api.edenai.run/v3/info                      # every expert feature and subfeature
+curl -s https://api.edenai.run/v3/info/ocr/financial_parser # providers, model strings, pricing, input and output schema
 ```
 
-Base URL: `https://api.edenai.run`
+- **LLM capabilities:** `capabilities` says what a model supports, for example `supports_function_calling`, `supports_response_schema`, `supports_web_search`, `supports_prompt_caching` and `input_modalities`. A missing key or `null` means not supported.
+- **Per-surface lists:** each OpenAI-style surface has its own list: `/v3/embeddings/models`, `/v3/images/models`, `/v3/audio/speech/models`, `/v3/audio/transcriptions/models`, `/v3/videos/models`, `/v3/moderations/models` and `/v3/alpha/decisions/models`.
+- **Text-to-speech voices:** `GET /v3/info/audio/tts/voices` lists them.
 
-Auth header on every request:
-
-```
-Authorization: Bearer $EDENAI_API_KEY
-Content-Type: application/json
-```
-
-## The v3 API surface
-
-Every AI call goes through one of these v3 endpoints:
-
-- **`POST /v3/chat/completions`** — OpenAI-compatible LLM chat. Use for any chat/completion against any LLM (Claude, GPT, Gemini, Mistral, Llama, Cohere, DeepSeek, Qwen, etc.). Drop-in replacement for OpenAI's `/chat/completions`.
-- **`POST /v3/responses`** — OpenAI-Responses-compatible. Same provider/model catalog as `/v3/chat/completions`, plus optional server-side conversation state (`store` + `previous_response_id`) so multi-turn chats don't resend full history.
-- **`POST /v3/v1/messages`** — Anthropic-Messages-compatible drop-in. Accepts native Anthropic request bodies and returns Anthropic-shaped responses. Also usable as a Claude Code backend via `ANTHROPIC_BASE_URL`.
-- **`POST /v3/universal-ai`** — every non-LLM AI feature (OCR, image gen, TTS, STT, document parsing, moderation, NER, translation, etc.). Single endpoint; the `model` field routes to the right feature and provider.
-- **`POST /v3/universal-ai/async`** — same thing for long-running tasks (video generation, speech-to-text, multi-page OCR). Returns a `job_id` you poll on `GET /v3/universal-ai/async/{job_id}`.
-
-Plus a few support endpoints: `POST /v3/moderations` (OpenAI-compatible), `POST /v3/v1/messages/count_tokens` (Anthropic-compatible token counter), `POST /v3/upload` (file management), `GET /v3/info` (feature catalog), `GET /v3/models` (LLM catalog).
-
-> **v2 is legacy.** Only cost monitoring and user-token management remain on `/v2/*` — supported through end of 2026. Never use v2 for AI calls.
-
-## LLM chat — `POST /v3/chat/completions`
-
-OpenAI-compatible. The `model` field takes a `provider/model-id` string:
-
-```bash
-curl -X POST https://api.edenai.run/v3/chat/completions \
-  -H "Authorization: Bearer $EDENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "anthropic/claude-opus-4-7",
-    "messages": [{"role": "user", "content": "Explain photosynthesis in one sentence."}],
-    "max_tokens": 200
-  }'
-```
-
-Because this endpoint is OpenAI-compatible, the official OpenAI SDK works by swapping base URL and key:
+## LLM chat: `POST /v3/chat/completions`
 
 ```python
-from openai import OpenAI
 import os
+from openai import OpenAI
 
-client = OpenAI(
-    api_key=os.environ["EDENAI_API_KEY"],
-    base_url="https://api.edenai.run/v3",
-)
-
+client = OpenAI(api_key=os.environ["EDENAI_API_KEY"], base_url="https://api.edenai.run/v3")
 resp = client.chat.completions.create(
-    model="anthropic/claude-sonnet-4-6",
-    messages=[{"role": "user", "content": "Hello"}],
+    model="anthropic/claude-sonnet-latest",
+    messages=[{"role": "user", "content": "Explain photosynthesis in one sentence."}],
+    extra_body={"fallbacks": ["openai/gpt-latest"], "tags": {"project": "demo"}},  # Eden AI extensions
 )
+print(resp.choices[0].message.content)
 ```
 
-### Finding models
+**Model names:**
+- **`provider/model`** pins the provider: `anthropic/claude-sonnet-latest`, `openai/gpt-latest`, `vertex/gemini-flash-latest`. The catalog's `alias_of` shows the dated model an alias currently points to. Pin a dated id when you need reproducibility.
+- **A bare model name routes it.** Send `gpt-oss-120b` and Eden AI picks one of the providers serving it, the cheapest by default, and fails over between them. You can steer this with `routing.sort` (`cost`, `speed`, `latency` or `exact`) or a suffix like `gpt-oss-120b:latency`. `routing.allowed_providers` and `routing.allow_fallbacks` restrict it.
+- **`@edenai` picks the model itself** from optional `router_candidates`. `routing.quality_cost` runs from 0 (best model) to 10 (cheapest model that can still do it).
+- **`<model>@eu`** pins a region.
+- More in [references/routing-and-reliability.md](references/routing-and-reliability.md).
 
-The LLM catalog changes often — do NOT rely on any hardcoded list. Always fetch the current catalog before picking a model when the user hasn't named one explicitly:
+**What works beyond plain OpenAI:**
+- **`fallbacks`:** up to 3 models, tried in order; more than 3 returns 422. Failed attempts aren't billed.
+- **`tags`:** up to 10 key/value strings, to split cost per customer, project or environment. They can also go in an `X-EdenAI-Tags: client=acme,env=prod` header.
+- **`session_id`:** keeps a routed conversation on the provider that holds its prompt cache.
+- **Standard OpenAI parameters** pass through: `reasoning_effort`, `response_format` with `json_schema`, `tools`, `web_search_options` and `stream`. Claude also takes `thinking: {"type": "enabled", "budget_tokens": N}`.
+- **Files:** attach one as a content block, `{"type": "file", "file": {"file_id": "<id from /v3/upload>"}}`.
+- **Cost and provider:** every response carries `cost` (USD, a number) and `provider`. When streaming, send `stream_options: {"include_usage": true}` to get `cost` in the final usage chunk.
+- **What Eden AI decided:** send `x-edenai-metadata: enabled` for an `edenai_metadata` block. It shows the requested model, the strategy, which provider served, every attempt with its status, the region, BYOK use and the recorded tags.
+
+Stateful chat is in [references/responses-api.md](references/responses-api.md). In our September 2026 test, chaining with `previous_response_id` returned HTTP 500 for Claude and Mistral, so test it before relying on it. The Anthropic SDK and Claude Code are in [references/anthropic-messages.md](references/anthropic-messages.md).
+
+## Expert models: `POST /v3/universal-ai`
+
+One request shape for every non-LLM feature:
 
 ```bash
-curl -s https://api.edenai.run/v3/models \
-  -H "Authorization: Bearer $EDENAI_API_KEY"
-```
-
-Model IDs follow a `provider/model-id` shape. Common prefixes include `anthropic/`, `openai/`, `google/`, `mistral/`, `cohere/`, `amazon/` (Bedrock hub), `databricks/`, `deepinfra/`, `cloudflare/`, `cerebras/`, `bytedance/`. A few concrete examples for orientation: `anthropic/claude-opus-4-7`, `openai/gpt-4o`, `google/gemini-2.5-pro`. This list is illustrative — new providers appear often; check `GET /v3/models` for truth.
-
-### LLM features
-
-- **Streaming** — `"stream": true`.
-- **Tool / function calling** — OpenAI format.
-- **Vision inputs** — `image_url` content blocks.
-- **Structured output** — `response_format` with a JSON schema.
-- **Web search** — when the model supports it.
-- **Smart routing** — Eden AI auto-picks a model based on constraints.
-- **Fallback** — swap providers on failure without touching client code.
-- **BYOK** — bring your own OpenAI/Anthropic/etc. key; Eden still handles routing and consolidated reporting.
-
-## Expert models — `POST /v3/universal-ai`
-
-One endpoint, one payload shape, every non-LLM feature:
-
-```json
-{
-  "model": "category/feature/provider",
-  "fallbacks": ["category/feature/other_provider"],
-  "input": { "...feature-specific fields": "..." }
-}
-```
-
-- `model` — a three-part string `"<category>/<feature>/<provider>"`, e.g. `"text/moderation/microsoft"` or `"ocr/financial_parser/openai"`.
-- `fallbacks` — optional array (max 3) of alternate model strings tried **sequentially** if the primary fails. Eden returns the first success.
-- `input` — feature-specific parameters (text, file, language, etc.).
-
-Example — moderate some text, fall back to Google if Microsoft fails:
-
-```bash
-curl -X POST https://api.edenai.run/v3/universal-ai \
-  -H "Authorization: Bearer $EDENAI_API_KEY" \
-  -H "Content-Type: application/json" \
+curl -s -X POST https://api.edenai.run/v3/universal-ai \
+  -H "Authorization: Bearer $EDENAI_API_KEY" -H "Content-Type: application/json" \
   -d '{
-    "model": "text/moderation/microsoft",
-    "fallbacks": ["text/moderation/google", "text/moderation/openai"],
-    "input": {"text": "Some text to moderate"}
+    "model": "ocr/financial_parser/mindee",
+    "fallbacks": ["ocr/financial_parser/veryfi"],
+    "input": {"file": "https://example.com/invoice.pdf"}
   }'
 ```
 
-### Parallel comparison is client-side
+- **`model`:** `feature/subfeature/provider[/model]`, for example `text/moderation/openai` or `image/generation/openai/gpt-image-2`.
+- **`input`:** the feature's own fields, such as `text`, `file`, `language`, `query` or `url`. `GET /v3/info/{feature}/{subfeature}` gives the exact schema. A file field takes a public URL or a `file_id` from `/v3/upload`.
+- **`fallbacks`:** up to 3 more model strings for the same feature. They aren't allowed on `audio/tts` or `image/face_recognition`.
+- **Optional fields:**
+  - `provider_params` passes native provider options. It isn't validated, and it's sometimes restricted to an allow-list.
+  - `show_original_response: true` adds the provider's raw reply.
+  - `tags` works as it does for chat.
 
-v3 does **not** run multiple providers in parallel in a single call. If the user wants side-by-side provider comparison (e.g. cost/quality A/B), fire multiple `POST /v3/universal-ai` requests in parallel from your code and aggregate the results. Use `fallbacks` for *reliability* (sequential retry), multi-request fan-out for *comparison*.
+The response is **always HTTP 200 once the request is valid, even when the provider failed.** Check `status`:
 
-### Finding features
-
-The feature × provider matrix changes often — do NOT rely on any hardcoded list. Always fetch the authoritative catalog before picking a feature/provider pair:
-
-```bash
-curl -s https://api.edenai.run/v3/info \
-  -H "Authorization: Bearer $EDENAI_API_KEY"
+```json
+{"status": "success", "cost": "0.0100", "provider": "mindee", "feature": "ocr", "subfeature": "financial_parser", "output": {"...": "..."}}
+{"status": "fail", "cost": "0", "provider": "mindee", "error": {"message": "..."}, "...": "..."}
 ```
 
-Every AI feature lives under one of six categories: `text`, `translation`, `ocr`, `image`, `audio`, `video`. Model strings follow `category/feature/provider`.
+`cost` is a string of USD here, so convert it with `float()`.
 
-Illustrative examples (not exhaustive — call `GET /v3/info` for the full list and supported providers):
+**Feature catalog (September 2026).** This is a snapshot; check `GET /v3/info` for the live list.
 
-- **text** — `text/moderation/{provider}`, `text/named_entity_recognition/{provider}`, `text/topic_extraction/{provider}`
-- **translation** — `translation/automatic_translation/{provider}`, `translation/document_translation/{provider}`
-- **ocr** — `ocr/ocr/{provider}`, `ocr/financial_parser/{provider}`, `ocr/identity_parser/{provider}`, `ocr/resume_parser/{provider}`
-- **image** — `image/generation/{provider}`, `image/object_detection/{provider}`, `image/background_removal/{provider}`, `image/face_detection/{provider}`
-- **audio** — `audio/text_to_speech/{provider}`, `audio/speech_to_text_async/{provider}`
-- **video** — `video/generation_async/{provider}`
+| Category | Subfeatures (`_async` ones use the async endpoint) |
+|---|---|
+| `text` | `moderation`, `ai_detection`, `named_entity_recognition`, `topic_extraction`, `spell_check`, `anonymization`, `plagia_detection` |
+| `web` | `search`, `scraping`, `map`, `crawl_async`, `batch_scrape_async`, `structured_extraction_async`, `research_async` |
+| `ocr` | `ocr`, `ocr_async`, `ocr_tables_async`, `financial_parser`, `identity_parser`, `resume_parser` |
+| `image` | `generation`, `background_removal`, `object_detection`, `face_detection`, `face_compare`, `face_recognition`, `explicit_content`, `logo_detection`, `anonymization`, `ai_detection`, `deepfake_detection` |
+| `translation` | `automatic_translation`, `document_translation` |
+| `audio` | `tts`, `speech_to_text_async` |
+| `video` | `generation_async`, `deepfake_detection_async` |
 
-Feature names ending in `_async` must use the async endpoint (`POST /v3/universal-ai/async`).
+Providers per feature, output shapes and `face_recognition` collections are covered in [references/universal-ai.md](references/universal-ai.md).
 
-## Async jobs — `/v3/universal-ai/async`
+## Async jobs: `/v3/universal-ai/async`
 
-Feature names ending in `_async` take too long for a synchronous response. Fire them through the async endpoint:
-
-1. `POST /v3/universal-ai/async` with the usual `{model, fallbacks, input}` — returns `{"job_id": "..."}` (HTTP 202).
-2. `GET /v3/universal-ai/async/{job_id}` — returns `status` (`pending` / `processing` / `finished` / `failed`) and, once finished, the `results`.
-3. `GET /v3/universal-ai/async` — list your jobs.
-4. `DELETE /v3/universal-ai/async/{job_id}` — cancel / delete.
-
-Poll with backoff — start at ~2 s, back off to ~30 s. Don't hammer.
+Subfeatures ending in `_async` run as jobs: speech-to-text, multipage OCR, tables, crawls, deep research and video.
 
 ```python
 import os, time, requests
 
-headers = {"Authorization": f"Bearer {os.environ['EDENAI_API_KEY']}"}
+API = "https://api.edenai.run/v3"
+H = {"Authorization": f"Bearer {os.environ['EDENAI_API_KEY']}"}
 
-job = requests.post(
-    "https://api.edenai.run/v3/universal-ai/async",
-    headers=headers,
-    json={
-        "model": "audio/speech_to_text_async/openai",
-        "input": {"file": "https://example.com/meeting.mp3", "language": "en"},
-    },
-).json()
+job = requests.post(f"{API}/universal-ai/async", headers=H, json={
+    "model": "audio/speech_to_text_async/assembly",
+    "input": {"file": "https://example.com/meeting.mp3", "language": "en", "speakers": 2},
+}).json()                                       # HTTP 202: {"public_id": "...", "status": "processing", ...}
 
-job_id = job["job_id"]
 delay = 2
 while True:
-    r = requests.get(
-        f"https://api.edenai.run/v3/universal-ai/async/{job_id}",
-        headers=headers,
-    ).json()
-    if r["status"] in ("finished", "failed"):
+    body = requests.get(f"{API}/universal-ai/async/{job['public_id']}", headers=H).json()
+    if body["status"] != "processing":          # "success" or "fail"
         break
     time.sleep(delay)
     delay = min(delay * 2, 30)
+if body["status"] == "fail":
+    raise RuntimeError(body["error"])
+print(body["output"]["text"], body["cost"])
 ```
 
-**Webhooks** are an alternative — pass a webhook URL in the POST and Eden AI pings you when the job finishes. Prefer webhooks over polling when the caller can receive inbound HTTP.
+- **Job ids:** the id is `public_id`, not `job_id`. Statuses are `processing`, `success` and `fail`, and the result is in `output`.
+- **Webhooks instead of polling:** add `"webhook_receiver": "https://…"` and optionally `user_webhook_parameters`. Eden AI then POSTs a signed `async_job_completed` payload when the job ends.
+- **Managing jobs:** `GET /v3/universal-ai/async` lists jobs, and `DELETE /v3/universal-ai/async/{id}` deletes one.
+- Signature checks are in [references/universal-ai.md](references/universal-ai.md).
 
-## OpenAI-compatible moderation — `POST /v3/moderations`
+## Files: `/v3/upload`
 
-Drop-in for OpenAI's `/moderations`. Same request and response shape. Useful when you already have OpenAI-moderation client code.
+- **Upload:** `POST /v3/upload` takes multipart `file`, plus optional `expires_in_days` (1–30) and `purpose`. It returns a `file_id`. In our test, a file uploaded without `expires_in_days` came back with an `expires_at` 30 days out, although one docs page says 7. Set it explicitly when it matters.
+- **Use it:** in Universal AI `input.file`, in a chat `file` content block, in image edits (`images: [{"file_id": …}]`) and in videos (`input_reference: {"file_id": …}`).
+- **Manage files:** `GET /v3/upload` lists them. `POST /v3/upload/delete` with `{"file_ids": [...]}` deletes some, and `DELETE /v3/upload` deletes all.
+- **Public URLs** work wherever a file is expected, so you only need to upload local files.
 
-## File management — `/v3/upload`
+## MCP server
 
-Upload files once and reuse them by ID across calls — avoids re-uploading large inputs.
+`https://mcp.edenai.run/mcp` uses streamable HTTP and `Authorization: Bearer $EDENAI_API_KEY`.
+- **Tools:** one per expert feature (`ocr`, `ocr_financial_parser`, `web_search`, `web_research`, `audio_tts`, …), plus `upload_file`, `check_job` and `list_models`.
+- **Claude Code:**
 
-- `POST /v3/upload` — upload (returns a file ID)
-- `GET /v3/upload` — list your files (optional `purpose` filter)
-- `POST /v3/upload/delete` — delete specific files by ID
-- `DELETE /v3/upload` — delete all your files (irreversible)
+  ```bash
+  claude mcp add --transport http edenai https://mcp.edenai.run/mcp --header "Authorization: Bearer $EDENAI_API_KEY"
+  ```
 
-Reference an uploaded file in any `/v3/universal-ai` call by passing its ID in the `input.file` field.
+- **Limitation:** tools take only the unified inputs. For provider options such as `provider_params`, call the REST API.
+- More in [references/mcp-server.md](references/mcp-server.md).
 
-## Platform info endpoints
+## Errors and retries
 
-- `GET /v3/info` — full feature + provider catalog. Authoritative.
-- `GET /v3/models` — live LLM catalog.
+| Signal | Meaning | What to do |
+|---|---|---|
+| Universal AI HTTP 200 with `"status": "fail"` | The provider failed | Add `fallbacks`, or read `error.message` |
+| 400 | Bad request, refused before any provider is called and not billed. Examples are an invalid tag, or a file URL Eden AI couldn't fetch (`Unable to access file URL (status 404)`) | Fix the request, or upload the file |
+| 401 / 403 | Bad or missing key, or an inference key used on `/v3/manage` | Don't retry |
+| 402 | Not enough credits | Top up, or check the key's budget |
+| 422 | Validation error, for example more than 3 fallbacks or a wrong `input` field | Check `GET /v3/info/...` for the schema |
+| 429 | Rate limited. The default is 10 requests per second per account, shared by all its keys | Back off and retry |
+| 451 | The model isn't allowed on the EU endpoint | Pick an EU-listed model from `api.eu.edenai.run/v3/models` |
+| 5xx | Eden AI or provider trouble | Retry with backoff, and keep `fallbacks` set |
 
-## Legacy v2 (cost & tokens only)
+OpenAI-compatible endpoints return errors in OpenAI's `{"error": {...}}` shape. Universal AI and management endpoints use `{"detail": ...}`.
 
-The only remaining v2 paths — supported through end of 2026 — are for account-level concerns, not AI calls:
+## Cost, usage and caching
 
-- `GET /v2/info/splitted-schema/cost_management/` — consumption
-- `GET /v2/info/splitted-schema/cost_management/credits/` — remaining credits
-- `GET|POST /v2/info/splitted-schema/user/custom_token/` — API token management
+- **Cost:** every response carries `cost` in USD.
+  - Universal AI returns it as a string.
+  - `/v3/audio/speech` returns raw audio, with the cost in the `x-edenai-cost` header.
+  - A video's cost stays 0 until the job completes.
+- **Pricing:** you pay the provider's price with no markup, plus a 5.5% platform fee on the self-serve plan.
+- **Cost splits:** tag calls (`tags` or `X-EdenAI-Tags`) and see the split in the dashboard. Pull usage programmatically from `GET /v3/manage/usage/` with a management key. The old `/v2` cost endpoints are no longer documented, and the one we tried returned 405.
+- **Response caching:** identical requests (same model, same input) are answered from Eden AI's cache for free. It's on by default and can be toggled per project in the dashboard. Tags don't make requests different.
+- **Prompt caching** is separate: the provider still generates a fresh answer from a cached prefix. See [references/routing-and-reliability.md](references/routing-and-reliability.md).
 
-Do NOT use v2 for any AI request. Every AI call goes through `/v3/chat/completions` or `/v3/universal-ai`.
+## Good defaults
 
-## Error handling
-
-Two distinct failure modes:
-
-1. **HTTP-level failure** (401, 403, 429, 5xx) — auth, quota, rate limit, Eden outage. Retry with backoff on 429/5xx; 4xx auth errors are not retriable.
-2. **All fallbacks exhausted** — when the primary `model` *and* every provider in `fallbacks` fail, the response will surface the error. Always inspect the response body for an `error` field even on a 2xx; the returned JSON tells you which provider actually served the response.
-
-For reliability in production, always set `fallbacks` to 1–3 alternate providers so transient provider outages don't break your request.
-
-## Cost tracking
-
-Every `/v3/universal-ai` response includes a `cost` field (USD) for the provider that served the request. The `/v3/chat/completions` endpoint returns usage in the standard OpenAI format (`prompt_tokens`, `completion_tokens`, `total_tokens`); dollar cost is available on the Eden AI dashboard and via the v2 cost-monitoring endpoints above.
-
-When the user cares about cost comparison — and they often do, it's half the reason Eden AI exists — surface `cost` in the response you return.
-
-## Guardrails and good defaults
-
-- **Never log or echo the API key.** Read from `EDENAI_API_KEY`; pass in headers; done.
-- **One provider first, fallbacks for reliability.** Use `fallbacks` for cascading retries; fan out client-side only when the user explicitly wants parallel comparison.
-- **Prefer specialized features.** `ocr/financial_parser` returns structured line items / totals / vendor; generic `ocr/ocr` returns raw text. Don't regex line items out of raw OCR.
-- **Surface `cost`** when comparing providers.
-- **Use async for anything long-running.** Video, multi-page OCR, speech-to-text on meeting-length audio — always the async endpoint.
-- **Upload reused files once.** Large files used in multiple calls should go through `/v3/upload` first.
-
-## Other LLM endpoints — Responses API and Anthropic Messages
-
-Two additional LLM endpoints cover narrower use cases. They are documented in full in `references/` — read the reference file only when the task calls for one.
-
-- **`POST /v3/responses`** → server-side conversation state (`store: true` + `previous_response_id`) so multi-turn chats don't resend history. Full details, chaining example: [references/responses-api.md](references/responses-api.md).
-- **`POST /v3/v1/messages`** → drop-in for Anthropic's native `/v1/messages`; accepts Anthropic request bodies verbatim. Main use cases: existing Anthropic-SDK code, or pointing **Claude Code itself** at Eden AI via `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`. Full details, SDK example, Claude Code setup, `count_tokens`: [references/anthropic-messages.md](references/anthropic-messages.md).
-
-### Which LLM endpoint to pick
-
-- Default to `/v3/chat/completions` — it's OpenAI-compatible and covers almost every LLM task.
-- Switch to `/v3/responses` only when the user wants Eden AI to hold conversation state server-side.
-- Switch to `/v3/v1/messages` only when the user is already on the Anthropic SDK, or wants to route Claude Code through Eden AI.
+- **Read the key** from `EDENAI_API_KEY`, and never log it or put it in a URL.
+- **Check the live catalog** before writing a model string, and prefer `-latest` aliases or bare routable names in long-lived code.
+- **Set `fallbacks`** in production so a provider outage doesn't fail the request. To compare providers side by side, send parallel requests yourself: `fallbacks` is sequential.
+- **Prefer specialized features.** `ocr/financial_parser` returns vendor, totals and line items. Don't regex them out of `ocr/ocr` text.
+- **Check `status`** on every Universal AI response, not just the HTTP code.
+- **Use the async endpoint** for `_async` features, and webhooks when the caller can receive them.
+- **Report `cost`** when the user is comparing options, and tag calls when cost needs splitting.
+- **Use a sandbox key** for tests and CI.
 
 ## Quick recipes
 
-**"Translate this and moderate the output."** → Two `/v3/universal-ai` calls: `translation/automatic_translation/deepl` then `text/moderation/openai`.
-
-**"Parse this invoice PDF and get the line items."** → `/v3/universal-ai` with `model: "ocr/financial_parser/mindee"` (or Veryfi, Klippa, etc.). Do NOT use generic OCR and regex.
-
-**"Which LLM is cheapest for this prompt?"** → Fire N parallel `/v3/chat/completions` calls with different `model` values, compare usage/dashboard cost.
-
-**"Transcribe this meeting and identify speakers."** → `/v3/universal-ai/async` with `model: "audio/speech_to_text_async/assemblyai"` (or Deepgram, Gladia). Poll until finished, or register a webhook.
-
-**"Generate a product image."** → `/v3/universal-ai` with `model: "image/generation/stabilityai"` (or OpenAI, Replicate, MiniMax, ByteDance, Leonardo).
-
-**"Fallback from OpenAI to Anthropic if OpenAI is down."** → `/v3/chat/completions` with smart routing, or `/v3/universal-ai` with `fallbacks: ["text/moderation/anthropic"]` etc.
-
-**"Route Claude Code through Eden AI."** → Set `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` to point at `/v3/v1/messages`. See [references/anthropic-messages.md](references/anthropic-messages.md).
-
----
-
-For anything not covered here, the live docs at https://edenai.co/docs are authoritative — Eden AI adds providers and endpoints often, so treat this skill's catalog as a starting map, not an exhaustive list.
+- **"Parse this invoice and get the line items."** Universal AI with `ocr/financial_parser/mindee`, falling back to `ocr/financial_parser/veryfi`.
+- **"Transcribe this meeting and label the speakers."** Async `audio/speech_to_text_async/assembly` (or `/deepgram`, `/gladia`) with `input.speakers`. Or use `POST /v3/audio/transcriptions` for the OpenAI shape.
+- **"Give my agent web search."** `web/search/tavily` (or `firecrawl`, `linkup`) with `{"query": …, "max_results": 5}`. Use `web/scraping/firecrawl` for one page, and async `web/research_async/tavily` for a cited research report. Or add the MCP server and let the agent call `web_search`.
+- **"Which LLM is cheapest for this?"** Send a bare routable name, which routes to the cheapest provider by default. To compare different models, fire parallel `/v3/chat/completions` calls and compare `cost`.
+- **"Fall back from OpenAI to Anthropic."** `{"model": "openai/gpt-latest", "fallbacks": ["anthropic/claude-sonnet-latest"]}` on `/v3/chat/completions`.
+- **"Embed these documents for RAG."** `POST /v3/embeddings` with a list `input`. Pick the model from `GET /v3/embeddings/models`.
+- **"Generate a product image."** `POST /v3/images/generations` with `vertex/gemini-2.5-flash-image`, or Universal AI `image/generation/openai/gpt-image-2`. Universal AI image generation also takes `reference_images`.
+- **"Generate a video."** `POST /v3/videos` (OpenAI shape) or async `video/generation_async/{provider}` (for example `pixverse/v6` or `pruna`). Use `provider_params` for native audio or aspect ratio.
+- **"Translate this, then moderate it."** `translation/automatic_translation/deepl`, then `text/moderation/microsoft` with `fallbacks: ["text/moderation/google"]`.
+- **"Track cost per customer."** Put `tags: {"client": "acme"}` on every call, or set `default_tags` on that customer's API key.
+- **"Run Claude Code through Eden AI."** Set `ANTHROPIC_BASE_URL=https://api.edenai.run/v3` and `ANTHROPIC_API_KEY=$EDENAI_API_KEY`. See [references/anthropic-messages.md](references/anthropic-messages.md).
